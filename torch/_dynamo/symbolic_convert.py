@@ -181,6 +181,7 @@ from .variables.iter import MAX_ITERATOR_LIMIT
 from .variables.lazy import LazyVariableTracker
 from .variables.lists import (
     BaseListVariable,
+    DequeIteratorVariable,
     ListIteratorVariable,
     ListVariable,
     SliceVariable,
@@ -6491,7 +6492,8 @@ class InliningGeneratorInstructionTranslator(InliningInstructionTranslator):
 
     def GET_YIELD_FROM_ITER(self, inst: Instruction) -> None:
         tos = self.stack[-1]
-        if not isinstance(tos, ListIteratorVariable):
+        # list, tuple, and deque iterators keep the same yield-from path
+        if not isinstance(tos, (ListIteratorVariable, DequeIteratorVariable)):
             self.pop()
             res = VariableTracker.build(self, iter).call_function(self, [tos], {})  # type: ignore[arg-type]
             self.push(res)

@@ -2299,7 +2299,7 @@ class ListIteratorVariable(IteratorVariable):
     def tp_iternext_impl(self, tx: "InstructionTranslatorBase") -> VariableTracker:
         # ref: https://github.com/python/cpython/blob/6280bb547840b609feedb78887c6491af75548e8/Objects/listobject.c#L4110-L4133
         if not self.is_mutable():
-            raise AssertionError("ListIteratorVariable must be mutable to iterate")
+            raise AssertionError("list iterator must be mutable to iterate")
         old_index = self.index
         if old_index >= len(self.items) or self.is_exhausted:
             self.is_exhausted = True
@@ -2350,12 +2350,14 @@ class TupleIteratorVariable(ListIteratorVariable):
     _cpython_type = type(iter(()))
 
 
-class DequeIteratorVariable(ListIteratorVariable):
+class DequeIteratorVariable(IteratorVariable):
+    # _deque_iterator is not a subclass of list_iterator in CPython
     _cpython_type = type(iter(collections.deque()))
 
     _nonvar_fields = {
+        "index",
         "saved_state",
-        *ListIteratorVariable._nonvar_fields,
+        *IteratorVariable._nonvar_fields,
     }
 
     def __init__(
@@ -2366,9 +2368,17 @@ class DequeIteratorVariable(ListIteratorVariable):
         index: int = 0,
         **kwargs: Any,
     ) -> None:
-        super().__init__(items, index=index, **kwargs)
+        super().__init__(**kwargs)
+        if not isinstance(items, list):
+            raise AssertionError(f"items must be a list, got {type(items).__name__}")
+        self.items = items
+        self.index = index
+        self.is_exhausted = False
         self.source_deque = source_deque
         self.saved_state = saved_state
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(length={len(self.items)}, index={repr(self.index)})"
 
     def _check_mutation(self, tx: "InstructionTranslatorBase") -> None:
         if self.source_deque.state != self.saved_state:
@@ -2378,10 +2388,51 @@ class DequeIteratorVariable(ListIteratorVariable):
 
     def tp_iternext_impl(self, tx: "InstructionTranslatorBase") -> VariableTracker:
         self._check_mutation(tx)
-        return super().tp_iternext_impl(tx)
+        if not self.is_mutable():
+            raise AssertionError("deque iterator must be mutable to iterate")
+        old_index = self.index
+        if old_index >= len(self.items) or self.is_exhausted:
+            self.is_exhausted = True
+            raise_observed_exception(StopIteration, tx)
+
+        tx.output.side_effects.mutation(self)
+        self.index += 1
+        return self.items[old_index]
+
+    def call_obj_hasattr(
+        self, tx: "InstructionTranslatorBase", name: str
+    ) -> ConstantVariable:
+        return VariableTracker.build(tx, hasattr(iter(collections.deque()), name))
 
     def python_type(self) -> type:
         return type(iter(collections.deque()))
+
+    def as_python_constant(self) -> Any:
+        if self.index > 0:
+            raise NotImplementedError
+        return iter([x.as_python_constant() for x in self.items])
+
+    def unpack_var_sequence(
+        self, tx: "InstructionTranslatorBase"
+    ) -> list[VariableTracker]:
+        if self.is_exhausted:
+            return []
+        self.is_exhausted = True
+        return list(self.items[self.index :])
+
+    def reconstruct(self, codegen: "PyCodegen") -> None:
+        # starting in 3.15 GET_ITER creates virtual iterators (see https://github.com/python/cpython/issues/145668), so use builtin iter instead
+        codegen.add_push_null(
+            lambda: codegen.append_output(codegen.create_load_python_module(iter))  # type: ignore[arg-type]
+        )
+        if not self.is_exhausted:
+            remaining_items = self.items[self.index :]
+        else:
+            # pyrefly: ignore [implicit-any]
+            remaining_items = []
+        codegen.foreach(remaining_items)
+        codegen.append_output(create_build_tuple(len(remaining_items)))
+        codegen.extend_output(create_call_function(1, False))
 
 
 class DequeReverseIteratorVariable(DequeIteratorVariable):
