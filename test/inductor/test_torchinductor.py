@@ -6623,7 +6623,6 @@ for dtype in (torch.int32, torch.int64):
             )
 
     @skip_if_gpu_halide  # slow
-    @xfail_if_mps  # Non-divisible input sizes are not implemented on MPS device
     @parametrize("combo_kernels", (False, True))
     def test_adaptive_avg_pool2d1(self, combo_kernels):
         with config.patch(combo_kernels=combo_kernels):
@@ -6651,7 +6650,6 @@ for dtype in (torch.int32, torch.int64):
                 (torch.randn(2, 4, 6, 6),),
             )
 
-    @xfail_if_mps  # Non-divisible input sizes are not implemented on MPS device
     def test_adaptive_avg_pool2d2(self):
         # Big kernel size, use fallback
         def fn(x):
